@@ -4,11 +4,14 @@ author: "Kylie Newcomer"
 date: date-modified
 format: html
 editor: visual
+execute: 
+  warning: false
+  message: false
 ---
 
 # Load Packages and Data
 
-```{r}
+```{r, echo=FALSE}
 library(tidyverse)
 library(here)
 library(sf) 
@@ -16,17 +19,18 @@ library(tmap)
 library(spData)
 library(kableExtra)
 library(terra)
+library(stars)
 ```
 
 ```{r}
 # load raster datasets
-light_07_v05 <- rast('data/VNP46A1/VNP46A1.A2021038.h08v05.001.2021039064328.tif')
+light_07_v05 <- read_stars('data/VNP46A1/VNP46A1.A2021038.h08v05.001.2021039064328.tif')
 
-light_07_v06 <- rast('data/VNP46A1/VNP46A1.A2021038.h08v06.001.2021039064329.tif')
+light_07_v06 <- read_stars('data/VNP46A1/VNP46A1.A2021038.h08v06.001.2021039064329.tif')
 
-light_16_v05 <- rast("data/VNP46A1/VNP46A1.A2021047.h08v05.001.2021048091106.tif")
+light_16_v05 <- read_stars("data/VNP46A1/VNP46A1.A2021047.h08v05.001.2021048091106.tif")
 
-light_16_06 <- rast("data/VNP46A1/VNP46A1.A2021047.h08v06.001.2021048091105.tif")
+light_16_v06 <- read_stars("data/VNP46A1/VNP46A1.A2021047.h08v06.001.2021048091105.tif")
 
 # load vector dataset
 roads <- st_read('data/gis_osm_roads_free_1.gpkg', query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'")
@@ -36,22 +40,219 @@ FROM gis_osm_buildings_a_free_1
 WHERE (type IS NULL AND name IS NULL)
 OR type in ('residential', 'apartments', 'house', 'static_caravan', 'detached')")
 
-# GeoDataBase- use st_read
-socioeco <- st_read('data/ACS_2019_5YR_TRACT_48_TEXAS.gdb', layers = "ACS_2019_5YR_TRACT_48_TEXAS")
+# Use st_read to read in census tracts
+acs_geom <- st_read('data/ACS_2019_5YR_TRACT_48_TEXAS.gdb', layer = "ACS_2019_5YR_TRACT_48_TEXAS")
+
+# Read in income layer
+acs_income <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), layer = "X19_INCOME")
+
+meta <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), layer = "TRACT_METADATA_2019")
+st_layers("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb")
 ```
 
-VNP 1038 - 05 and 06
-VNP 1047 - 05 and 06
--combine using st_mosaic()
+# Create blackout mask
+```{r}
+# Combine light data for Feb 7, 2021
+feb_07 <- st_mosaic(light_07_v05, light_07_v06)
 
-feb_07_comb - feb_16_comb =  >200
-NA for any values <200
-
-
-
-
+# Combine light data for Feb 16, 2021
+feb_16 <- st_mosaic(light_16_v05, light_16_v06)
+```
 
 
-Map Lights
+```{r}
+# Make my Houston bbox to crop raster
+htown_bbox <- st_bbox(c(xmin = -96.5, xmax = -94.5, ymin = 29, ymax = 30.5), crs = st_crs(4326))
+```
+
+```{r}
+crop_feb_07 <- st_crop(feb_07, htown_bbox)
+
+crop_feb_16 <- st_crop(feb_16, htown_bbox)
+```
+```{r}
+# Find the difference in light before and after storm
+cond_diff <- (crop_feb_07 - crop_feb_16)
+
+# Create a new object to preserve original
+diff_mask <- cond_diff
+
+# replace any 
+diff_mask[diff_mask < 200] <- NA
+
+```
+
+
+```{r}
+# make diff_mask a vector
+diff_mask_vector <- diff_mask %>% 
+  st_as_sf() %>% 
+  st_transform(crs = 3083) %>% 
+  st_make_valid() 
+
+```
+
+```{r}
+# Create light map for Feb 7, 2021
+map_07 <- tm_shape(crop_feb_07) +
+  tm_graticules() +
+  tm_raster(palette = "-Greys",
+            breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
+  tm_layout(legend.show = FALSE) +
+  tm_title_out("Luminance Pre-Storm")
+  # No legend- using common legend
+
+# Creating a legend for my tmap arrange
+legend <- tm_shape(crop_feb_07) +
+  tm_raster(title = "Light Intensity (nW cm-2sr-1)",
+            palette = "-Greys",
+            breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
+  tm_legend(orientation = "landscape") +
+  #tm_legend() + # not working
+  tm_layout(legend.only = TRUE) # Set to true so ONLY legend shows up
+
+# Create light map for Feb 16, 2021
+map_16 <- tm_shape(crop_feb_16) +
+  tm_graticules() +
+  tm_raster(palette = "-Greys",
+            breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
+  tm_layout(legend.show = FALSE) +
+  tm_title_out("Luminance Post-Storm") # No legend- using common legend
+
+tmap_arrange(map_07, legend, map_16,  nrow = 2)
+```
+# Exclude highways from the cropped blackout mask
+```{r}
+# Need to check units
+st_crs(roads)$units
+
+# Make a buffer for 200 m around highways
+buffered_hwys <- st_buffer(roads, dist = units::set_units(200, "m"))
+
+# 
+hwys_200 <- buffered_hwys %>% 
+  st_union() %>% 
+  st_transform('EPSG:3083')
+
+```
+
+
+
+```{r}
+# Find geometries in blackout mask not in highway buffer
+blackout_no_hwy <- st_difference(diff_mask_vector, hwys_200)
+
+```
+
+
+```{r}
+# CRS test
+if (crs(buildings) == crs(blackout_no_hwy)){
+  print("Coordinate reference systems match")
+}else{
+  warning("Updating coordinate reference boundary to match")
+  blackout_no_hwy <- st_transform(blackout_no_hwy, st_crs(buildings))
+}
+# Make my geometries valid for both buildings and blackout
+buildings <- buildings %>% 
+  st_make_valid()
+
+blackout_no_hwy <- blackout_no_hwy %>% 
+  st_make_valid()
+
+house_blackout_sgbp <- st_intersects(buildings, blackout_no_hwy)
+
+```
+
+```{r}
+# convert to logical vector
+house_blackout_logical <- lengths(house_blackout_sgbp) > 0
+
+# filter based on logical vector
+house_blackout = buildings[house_blackout_logical, ]
+```
+
+# Identify the number of homes likely impacted by blackouts
+## Map of homes in Houston that lost power
+```{r}
+tm_shape(house_blackout) +
+  tm_graticules() +
+  tm_polygons(col = "black", fill_alpha = tm_const()) +
+  tm_title_out("Houston Homes that Lost Power")
+
+```
+
+
+```{r}
+house_blackout %>% 
+  summarise(total_homes = n()) %>% 
+  st_drop_geometry() %>% 
+  kable()
+
+```
+
+```{r}
+# change CRS to match homes data
+acs_geom <- acs_geom %>% 
+  st_transform('EPSG:3083')
+
+# acs_geom data has two geoid columns
+acs_geom <- acs_geom %>% 
+  select(-GEOID, ) %>% # Drop GEOID column that does not match income layer
+  rename(., GEOID = GEOID_Data) # Rename column for join with income layer
+
+
+acs_income <- acs_income %>% 
+  select(GEOID, B19013e1) %>% 
+  rename("median_income" = B19013e1)
+```
+
+```{r}
+# Transform `acs_geom` CRS to match Houston bbox
+acs_geom <- st_transform(acs_geom, st_crs(htown_bbox))
+
+# Crop `acs_geoms` to Houston
+acs_geom_crop <- st_crop(acs_geom, htown_bbox)
+```
+
+
+```{r}
+# Join socioeconomic data with homes
+census_tracts <- left_join(acs_geom_crop, acs_income, by = "GEOID")
+
+
+```
+
+
+
+join socioeco with houses
+
+```{r}
+# Want to make a blackout or no blackout column
+buildings$blackout <- house_blackout_logical
+
+buildings <- buildings %>% 
+  st_transform('EPSG:3083')
+
+census_tracts <- st_transform(census_tracts, st_crs(buildings))
+
+home_income <- st_join(buildings, census_tracts, left = TRUE)
+
+```
+
+```{r}
+tm_shape(census_tracts) +
+  tm_polygons(fill = 'median_income',
+              breaks = c(0, 40000, 60000, 80000, 100000, 150000, Inf),
+              palette = "Purples")
+```
+
+```{r}
+ggplot(home_income, aes(blackout, median_income)) +
+  geom_boxplot()
+```
+
+st_overlap
+
 
 Estimate # of houses that lost power
