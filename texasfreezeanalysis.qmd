@@ -1,8 +1,8 @@
 ---
 title: "Impacts of Extreme Winter Storms in Texas"
 author: "Kylie Newcomer"
-date: date-modified
-format: html
+date: 11/10/2025
+format: pdf
 editor: visual
 execute: 
   warning: false
@@ -10,8 +10,7 @@ execute:
 ---
 
 # Load Packages and Data
-
-```{r, echo=FALSE}
+```{r, output=FALSE}
 library(tidyverse)
 library(here)
 library(sf) 
@@ -22,7 +21,7 @@ library(terra)
 library(stars)
 ```
 
-```{r}
+```{r, output=FALSE}
 # load raster datasets
 light_07_v05 <- read_stars('data/VNP46A1/VNP46A1.A2021038.h08v05.001.2021039064328.tif')
 
@@ -32,25 +31,34 @@ light_16_v05 <- read_stars("data/VNP46A1/VNP46A1.A2021047.h08v05.001.20210480911
 
 light_16_v06 <- read_stars("data/VNP46A1/VNP46A1.A2021047.h08v06.001.2021048091105.tif")
 
-# load vector dataset
-roads <- st_read('data/gis_osm_roads_free_1.gpkg', query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'")
+# Read in highway data
+roads <- st_read('data/gis_osm_roads_free_1.gpkg', 
+                 query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'")
 
+# Read in homes data
 buildings <- st_read('data/gis_osm_buildings_a_free_1.gpkg', query = "SELECT *
 FROM gis_osm_buildings_a_free_1
 WHERE (type IS NULL AND name IS NULL)
 OR type in ('residential', 'apartments', 'house', 'static_caravan', 'detached')")
 
-# Use st_read to read in census tracts
-acs_geom <- st_read('data/ACS_2019_5YR_TRACT_48_TEXAS.gdb', layer = "ACS_2019_5YR_TRACT_48_TEXAS")
 
-# Read in income layer
-acs_income <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), layer = "X19_INCOME")
-
-meta <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), layer = "TRACT_METADATA_2019")
+# Look at layers of socioeconomic data 
 st_layers("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb")
+
+# Read in geometry layer of ACS data
+acs_geom <- st_read('data/ACS_2019_5YR_TRACT_48_TEXAS.gdb', 
+                    layer = "ACS_2019_5YR_TRACT_48_TEXAS")
+
+# Read in income layer of ACS
+acs_income <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), 
+                      layer = "X19_INCOME")
+# Read in socioeconomic metadata
+meta <- st_read(here("data/ACS_2019_5YR_TRACT_48_TEXAS.gdb"), 
+                layer = "TRACT_METADATA_2019")
 ```
 
-# Create blackout mask
+
+Start by combining the two grids of light data for both dates of interest. A bbox of the Houston metropolitan area is created and light data is cropped.
 ```{r}
 # Combine light data for Feb 7, 2021
 feb_07 <- st_mosaic(light_07_v05, light_07_v06)
@@ -59,17 +67,21 @@ feb_07 <- st_mosaic(light_07_v05, light_07_v06)
 feb_16 <- st_mosaic(light_16_v05, light_16_v06)
 ```
 
-
 ```{r}
 # Make my Houston bbox to crop raster
-htown_bbox <- st_bbox(c(xmin = -96.5, xmax = -94.5, ymin = 29, ymax = 30.5), crs = st_crs(4326))
+htown_bbox <- st_bbox(c(xmin = -96.5, xmax = -94.5, ymin = 29, ymax = 30.5), 
+                      crs = st_crs(4326))
 ```
 
 ```{r}
+# Crop light data to Houston
 crop_feb_07 <- st_crop(feb_07, htown_bbox)
 
 crop_feb_16 <- st_crop(feb_16, htown_bbox)
 ```
+
+# Create blackout mask
+Find the difference of light from before the storms and after. Reassign all difference values that are below 200 nW cm-2sr-1 as NA's. Transform the difference mask as a vector. Maps of the light intensity of the pre and post storm dates are mapped.
 ```{r}
 # Find the difference in light before and after storm
 cond_diff <- (crop_feb_07 - crop_feb_16)
@@ -77,7 +89,7 @@ cond_diff <- (crop_feb_07 - crop_feb_16)
 # Create a new object to preserve original
 diff_mask <- cond_diff
 
-# replace any 
+# replace any differences below 200 with NA
 diff_mask[diff_mask < 200] <- NA
 
 ```
@@ -86,7 +98,7 @@ diff_mask[diff_mask < 200] <- NA
 ```{r}
 # make diff_mask a vector
 diff_mask_vector <- diff_mask %>% 
-  st_as_sf() %>% 
+  st_as_sf()  %>% 
   st_transform(crs = 3083) %>% 
   st_make_valid() 
 
@@ -94,42 +106,38 @@ diff_mask_vector <- diff_mask %>%
 
 ```{r}
 # Create light map for Feb 7, 2021
-map_07 <- tm_shape(crop_feb_07) +
+tm_shape(crop_feb_07) +
   tm_graticules() +
-  tm_raster(palette = "-Greys",
+  tm_raster(palette = "-Greys", # Reverse palette to highlight light better
+            title = "Light Intensity \n(nW cm-2sr-1)",
             breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
-  tm_layout(legend.show = FALSE) +
-  tm_title_out("Luminance Pre-Storm")
-  # No legend- using common legend
+  tm_title_out("Lights in Houston on Feb. 07, 2021 Pre-Storm")
 
-# Creating a legend for my tmap arrange
-legend <- tm_shape(crop_feb_07) +
-  tm_raster(title = "Light Intensity (nW cm-2sr-1)",
-            palette = "-Greys",
-            breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
-  tm_legend(orientation = "landscape") +
-  #tm_legend() + # not working
-  tm_layout(legend.only = TRUE) # Set to true so ONLY legend shows up
 
 # Create light map for Feb 16, 2021
-map_16 <- tm_shape(crop_feb_16) +
+tm_shape(crop_feb_16) +
   tm_graticules() +
-  tm_raster(palette = "-Greys",
+  tm_raster(palette = "-Greys", # Same palette as Feb 7 map
+            title = "Light Intensity \n(nW cm-2sr-1)",
             breaks = c(0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, Inf)) +
-  tm_layout(legend.show = FALSE) +
-  tm_title_out("Luminance Post-Storm") # No legend- using common legend
-
-tmap_arrange(map_07, legend, map_16,  nrow = 2)
+  tm_title_out("Lights in Houston on Feb. 16, 2021 Post-Storm")
 ```
+
 # Exclude highways from the cropped blackout mask
+The light from the major highways around Houston must be accounted for. Create a 200 m buffer for the highways. Find the areas of the blackout mask without the highways. 
 ```{r}
 # Need to check units
 st_crs(roads)$units
+# Unit test did not work
+```
 
+
+```{r}
 # Make a buffer for 200 m around highways
-buffered_hwys <- st_buffer(roads, dist = units::set_units(200, "m"))
+buffered_hwys <- st_buffer(roads, 
+                           dist = units::set_units(200, "m")) # Specify units since unit test did not work
 
-# 
+# Change CRS to match blackout mask
 hwys_200 <- buffered_hwys %>% 
   st_union() %>% 
   st_transform('EPSG:3083')
@@ -144,7 +152,8 @@ blackout_no_hwy <- st_difference(diff_mask_vector, hwys_200)
 
 ```
 
-
+# Identify the number of homes likely impacted by blackouts
+Find the intersection of homes in Houston and the blackout mask without highways. Create a new dataframe containing only homes that experienced the blackout.
 ```{r}
 # CRS test
 if (crs(buildings) == crs(blackout_no_hwy)){
@@ -172,25 +181,27 @@ house_blackout_logical <- lengths(house_blackout_sgbp) > 0
 house_blackout = buildings[house_blackout_logical, ]
 ```
 
-# Identify the number of homes likely impacted by blackouts
+## Estimate of homes affected by the blackout
+```{r}
+house_blackout %>% 
+  summarise(total_homes = n()) %>% 
+  st_drop_geometry() %>% 
+  kable(col.names = c("Total Homes Affected \nby the Blackouts")) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+```
+
 ## Map of homes in Houston that lost power
 ```{r}
 tm_shape(house_blackout) +
   tm_graticules() +
   tm_polygons(col = "black", fill_alpha = tm_const()) +
-  tm_title_out("Houston Homes that Lost Power")
+  tm_title_out("Homes that Lost Power in Houston")
 
 ```
 
-
-```{r}
-house_blackout %>% 
-  summarise(total_homes = n()) %>% 
-  st_drop_geometry() %>% 
-  kable()
-
-```
-
+# Socioeconomic data of homes in Houston
+The geometry and income layers of the US Census data were combined. The census tract dataframe was cropped to Houston and projected with using ESPG:30383. Census data was combined with the homes data to determine the census tracts that experienced blackouts. Census data was used to assess distribution of household income in home that did and did not experience blackouts.
 ```{r}
 # change CRS to match homes data
 acs_geom <- acs_geom %>% 
@@ -201,10 +212,10 @@ acs_geom <- acs_geom %>%
   select(-GEOID, ) %>% # Drop GEOID column that does not match income layer
   rename(., GEOID = GEOID_Data) # Rename column for join with income layer
 
-
+# Only want 'GEOID' and 'B19013e1' (median household income) columns
 acs_income <- acs_income %>% 
   select(GEOID, B19013e1) %>% 
-  rename("median_income" = B19013e1)
+  rename("median_income" = B19013e1) # Rename column
 ```
 
 ```{r}
@@ -217,15 +228,11 @@ acs_geom_crop <- st_crop(acs_geom, htown_bbox)
 
 
 ```{r}
-# Join socioeconomic data with homes
+# Join census geometry layer with income layer
 census_tracts <- left_join(acs_geom_crop, acs_income, by = "GEOID")
-
 
 ```
 
-
-
-join socioeco with houses
 
 ```{r}
 # Want to make a blackout or no blackout column
@@ -236,23 +243,35 @@ buildings <- buildings %>%
 
 census_tracts <- st_transform(census_tracts, st_crs(buildings))
 
+# Combine all buildings and census data
 home_income <- st_join(buildings, census_tracts, left = TRUE)
 
+blackout_income <- st_join(house_blackout, census_tracts, left = TRUE)
 ```
 
+## Map of the census tracts in Houston that lost power
 ```{r}
-tm_shape(census_tracts) +
-  tm_polygons(fill = 'median_income',
-              breaks = c(0, 40000, 60000, 80000, 100000, 150000, Inf),
-              palette = "Purples")
+# Plot all homes in census
+tm_shape(home_income) +
+  tm_polygons(fill = "skyblue",
+              col = "lightblue") +
+tm_shape(blackout_income) + # Plot homes that experience blackout
+  tm_polygons(fill = "midnightblue",
+              col = "midnightblue") +
+tm_add_legend(labels = c("Yes", "No"),
+              fill = c("midnightblue", "skyblue"),
+              title = "Experienced Blackout:") +
+tm_title("Houston Census Tracts in Feburary 2021")
 ```
 
+## Distribution of median household incomes 
 ```{r}
 ggplot(home_income, aes(blackout, median_income)) +
-  geom_boxplot()
+  geom_boxplot(alpha = 0.5) +
+  labs(x = "Experienced blackout",
+       y = "Median household income (USD)",
+       title = "Homes Impacted by Power Crisis in Houston, 2021") +
+  theme_light()
 ```
 
-st_overlap
-
-
-Estimate # of houses that lost power
+Based on the data analysis and figures above, there was no indication that households in census tracts with lower median income had higher blackout rates. This leads to the conclusion that there were no socioeconomic factors influencing recovery. However, this conclusion is hard to believe as wealthier households likely had disproportionate access to resources for repairing and resupplying power for their homes. It is possible that since the date of the "post-storm" light data was Feb 16 2021, and the third storm did not conclude until Feb 20, 2021 this data does not accurately reflect recovery. Many homes remained without power for weeks after the storm and a date after the third storm concluded may have more accurately demostrated recovery rates across census tracts. 
